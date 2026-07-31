@@ -1,0 +1,13 @@
+node_modules
+.env
+*.log
+storage/proposal/*
+!storage/proposal/.gitkeep
+storage/logbook/*
+!storage/logbook/.gitkeep
+storage/surat/*
+!storage/surat/.gitkeep
+storage/avatar/*
+!storage/avatar/.gitkeep
+storage/general/*
+!storage/general/.gitkeep
