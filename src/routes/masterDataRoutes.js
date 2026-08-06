@@ -5,6 +5,9 @@ const { authenticate, authorize } = require('../middlewares/auth');
 
 router.use(authenticate);
 
+router.get('/summary', authorize('superadmin', 'admin'), masterDataController.getSummary);
+router.get('/dosen-aktif', masterDataController.getActiveDosen);
+
 // Fakultas
 router.get('/fakultas', masterDataController.getFakultas);
 

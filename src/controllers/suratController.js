@@ -1,131 +1,125 @@
 const pool = require('../config/database');
+const {
+  getNotaTugasData,
+  renderNotaTugasHtml,
+  generateNotaTugasPdf
+} = require('../services/notaTugasService');
+
+const canAccessNotaTugas = (user, note) => (
+  user.role === 'superadmin' ||
+  (user.role === 'mahasiswa' && note.mahasiswa_id === user.id) ||
+  (user.role === 'admin' && user.prodi_id && String(note.prodi_id) === String(user.prodi_id))
+);
 
 /**
- * Get all surat & SK records
- * GET /api/v1/surat
+ * Return only Nota Tugas records. Legacy research/sidang letters are no longer
+ * part of the active product flow.
  */
 const getSurat = async (req, res, next) => {
   try {
     const user = req.user;
-    const { jenis, status, search } = req.query;
+    if (!['superadmin', 'admin', 'mahasiswa'].includes(user.role)) {
+      return res.status(403).json({ success: false, message: 'Anda tidak memiliki akses ke Nota Tugas.' });
+    }
 
+    const { status, search } = req.query;
     let query = `
-      SELECT s.*, 
-             u.name as mahasiswa_nama, u.nim as mahasiswa_nim, u.avatar as mahasiswa_avatar,
-             pr.nama as prodi_nama
+      SELECT s.id, s.no_surat, s.mahasiswa_id, s.pengajuan_id, s.bimbingan_id,
+             s.jenis, s.perihal, s.tanggal, s.status, s.template_version, s.created_at,
+             u.name AS mahasiswa_nama, u.nim AS mahasiswa_nim, u.avatar AS mahasiswa_avatar,
+             pr.nama AS prodi_nama,
+             p.judul,
+             d1.name AS dosen_pembimbing1_nama,
+             d2.name AS dosen_pembimbing2_nama
       FROM manajemen_surat s
       JOIN users u ON s.mahasiswa_id = u.id
       LEFT JOIN prodi pr ON u.prodi_id = pr.id
-      WHERE 1=1
+      LEFT JOIN bimbingan b ON b.id = COALESCE(
+        s.bimbingan_id,
+        (SELECT b2.id FROM bimbingan b2
+         WHERE b2.mahasiswa_id = s.mahasiswa_id
+         ORDER BY b2.updated_at DESC LIMIT 1)
+      )
+      LEFT JOIN pengajuan_judul p ON p.id = COALESCE(s.pengajuan_id, b.pengajuan_id)
+      LEFT JOIN users d1 ON d1.id = b.dosen_pembimbing1_id
+      LEFT JOIN users d2 ON d2.id = b.dosen_pembimbing2_id
+      WHERE s.jenis = 'nota_tugas'
     `;
     const params = [];
 
     if (user.role === 'mahasiswa') {
       query += ' AND s.mahasiswa_id = ?';
       params.push(user.id);
-    } else if (user.role === 'admin' && user.prodi_id) {
-      query += ' AND u.prodi_id = ?';
-      params.push(user.prodi_id);
-    }
-
-    if (jenis) {
-      query += ' AND s.jenis = ?';
-      params.push(jenis);
+    } else if (user.role === 'admin') {
+      if (!user.prodi_id) query += ' AND 1 = 0';
+      else {
+        query += ' AND u.prodi_id = ?';
+        params.push(user.prodi_id);
+      }
     }
     if (status) {
       query += ' AND s.status = ?';
       params.push(status);
     }
     if (search) {
-      query += ' AND (s.no_surat LIKE ? OR s.perihal LIKE ? OR u.name LIKE ? OR u.nim LIKE ?)';
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      const term = `%${search}%`;
+      query += ' AND (s.no_surat LIKE ? OR u.name LIKE ? OR u.nim LIKE ? OR p.judul LIKE ?)';
+      params.push(term, term, term, term);
     }
-
-    query += ' ORDER BY s.created_at DESC';
+    query += ' ORDER BY s.tanggal DESC, s.created_at DESC';
 
     const [rows] = await pool.query(query, params);
-    return res.status(200).json({
-      success: true,
-      count: rows.length,
-      data: rows
-    });
+    return res.status(200).json({ success: true, count: rows.length, data: rows });
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * Create new surat / SK record (by Admin Prodi / Superadmin)
- * POST /api/v1/surat
- */
-const createSurat = async (req, res, next) => {
+const getNotaTugasPreview = async (req, res, next) => {
   try {
-    const { no_surat, mahasiswa_id, jenis, perihal, status } = req.body;
-    if (!no_surat || !mahasiswa_id || !perihal) {
-      return res.status(400).json({ success: false, message: 'Nomor surat, mahasiswa, dan perihal wajib diisi!' });
+    const note = await getNotaTugasData(pool, req.params.id);
+    if (!note) return res.status(404).json({ success: false, message: 'Nota Tugas tidak ditemukan.' });
+    if (!canAccessNotaTugas(req.user, note)) {
+      return res.status(403).json({ success: false, message: 'Anda tidak memiliki akses ke Nota Tugas ini.' });
     }
-
-    const [existing] = await pool.query('SELECT id FROM manajemen_surat WHERE no_surat = ?', [no_surat]);
-    if (existing.length > 0) {
-      return res.status(400).json({ success: false, message: 'Nomor surat sudah digunakan di dalam sistem!' });
-    }
-
-    const id = (jenis === 'sk_pembimbing' ? 'SK-' : 'SR-') + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
-    const tanggal = new Date().toISOString().split('T')[0];
-    const fileUrl = req.file ? `/storage/surat/${req.file.filename}` : null;
-
-    await pool.query(
-      `INSERT INTO manajemen_surat (id, no_surat, mahasiswa_id, jenis, perihal, tanggal, status, file_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        no_surat,
-        mahasiswa_id,
-        jenis || 'sk_pembimbing',
-        perihal,
-        tanggal,
-        status || 'terbit',
-        fileUrl
-      ]
-    );
-
-    // Record audit log
-    await pool.query(
-      `INSERT INTO audit_log (id, user_id, user_name, role, action, ip_address, details) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'log-' + Date.now(),
-        req.user?.id || 'system',
-        req.user?.name || 'System',
-        req.user?.role || 'system',
-        'GENERATE_SK',
-        req.ip || '127.0.0.1',
-        `Menerbitkan surat ${no_surat} untuk mahasiswa ID ${mahasiswa_id}.`
-      ]
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: 'Surat resmi / SK berhasil diterbitkan!',
-      data: { id, no_surat, mahasiswa_id, status: status || 'terbit', tanggal }
-    });
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    return res.status(200).type('html').send(renderNotaTugasHtml(note));
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * Update status surat
- * PUT /api/v1/surat/:id
- */
+const downloadNotaTugasPdf = async (req, res, next) => {
+  try {
+    const note = await getNotaTugasData(pool, req.params.id);
+    if (!note) return res.status(404).json({ success: false, message: 'Nota Tugas tidak ditemukan.' });
+    if (!canAccessNotaTugas(req.user, note)) {
+      return res.status(403).json({ success: false, message: 'Anda tidak memiliki akses ke Nota Tugas ini.' });
+    }
+
+    const pdf = await generateNotaTugasPdf(note);
+    const safeNim = String(note.mahasiswa_nim || note.id).replace(/[^A-Za-z0-9_-]/g, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Nota-Tugas-${safeNim}.pdf"`);
+    res.setHeader('Content-Length', pdf.length);
+    return res.status(200).send(pdf);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updateSuratStatus = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { status } = req.body; // 'draf' | 'menunggu_ttd' | 'terbit' | 'arsip'
-
-    await pool.query('UPDATE manajemen_surat SET status = ? WHERE id = ?', [status, id]);
-    return res.status(200).json({ success: true, message: 'Status surat berhasil diperbarui!' });
+    const { status } = req.body;
+    if (!['draf', 'menunggu_ttd', 'terbit', 'arsip'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Status Nota Tugas tidak valid.' });
+    }
+    const [result] = await pool.query(
+      `UPDATE manajemen_surat SET status = ? WHERE id = ? AND jenis = 'nota_tugas'`,
+      [status, req.params.id]
+    );
+    if (!result.affectedRows) return res.status(404).json({ success: false, message: 'Nota Tugas tidak ditemukan.' });
+    return res.status(200).json({ success: true, message: 'Status Nota Tugas berhasil diperbarui.' });
   } catch (error) {
     next(error);
   }
@@ -133,6 +127,7 @@ const updateSuratStatus = async (req, res, next) => {
 
 module.exports = {
   getSurat,
-  createSurat,
+  getNotaTugasPreview,
+  downloadNotaTugasPdf,
   updateSuratStatus
 };

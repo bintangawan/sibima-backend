@@ -11,6 +11,7 @@ const plottingRoutes = require('./plottingRoutes');
 const logbookRoutes = require('./logbookRoutes');
 const suratRoutes = require('./suratRoutes');
 const dashboardRoutes = require('./dashboardRoutes');
+const persetujuanRoutes = require('./persetujuanRoutes');
 
 // API Routes
 router.use('/auth', authRoutes);
@@ -23,6 +24,7 @@ router.use('/plotting', plottingRoutes);
 router.use('/logbook', logbookRoutes);
 router.use('/surat', suratRoutes);
 router.use('/dashboard', dashboardRoutes);
+router.use('/persetujuan', persetujuanRoutes);
 
 // API Health check
 router.get('/health', (req, res) => {

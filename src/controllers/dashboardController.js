@@ -99,7 +99,7 @@ const getDashboardStats = async (req, res, next) => {
         WHERE dosen_pembimbing1_id = ? OR dosen_pembimbing2_id = ? 
         GROUP BY status_bimbingan
       `, [dosenId, dosenId]);
-      const bimbinganMap = { bimbingan_berjalan: 0, siap_sidang: 0, siap_acc: 0, sudah_acc: 0, lulus: 0 };
+      const bimbinganMap = { bimbingan_berjalan: 0, sempro: 0, sidang: 0, selesai: 0 };
       bimbinganCount.forEach(r => { bimbinganMap[r.status_bimbingan] = r.count; });
 
       const [logbookMenunggu] = await pool.query(`
@@ -123,14 +123,15 @@ const getDashboardStats = async (req, res, next) => {
         FROM bimbingan b
         JOIN users u ON b.mahasiswa_id = u.id
         LEFT JOIN pengajuan_judul p ON b.pengajuan_id = p.id
-        WHERE (b.dosen_pembimbing1_id = ? OR b.dosen_pembimbing2_id = ?) AND b.status_bimbingan IN ("bimbingan_berjalan", "siap_acc", "siap_sidang", "sudah_acc")
+        WHERE (b.dosen_pembimbing1_id = ? OR b.dosen_pembimbing2_id = ?) AND b.status_bimbingan IN ("bimbingan_berjalan", "sempro", "sidang")
         ORDER BY b.tanggal_plotting DESC
       `, [dosenId, dosenId]);
 
       stats = {
-        mahasiswaBimbingan: (bimbinganMap.bimbingan_berjalan || 0) + (bimbinganMap.siap_sidang || 0) + (bimbinganMap.siap_acc || 0) + (bimbinganMap.sudah_acc || 0),
+        mahasiswaBimbingan: (bimbinganMap.bimbingan_berjalan || 0) + (bimbinganMap.sempro || 0) + (bimbinganMap.sidang || 0),
         logbookMenungguReview: logbookMenunggu[0].count || 0,
-        siapSidang: (bimbinganMap.siap_sidang || 0) + (bimbinganMap.siap_acc || 0) + (bimbinganMap.sudah_acc || 0),
+        siapSidang: bimbinganMap.sidang || 0,
+        selesaiBimbingan: bimbinganMap.selesai || 0,
         kuotaMax: user.kuota_max || 10
       };
       extraData = {
@@ -141,7 +142,13 @@ const getDashboardStats = async (req, res, next) => {
     } else if (role === 'mahasiswa') {
       // 4. Mahasiswa stats: filtered by mahasiswa_id
       const mhsId = user.id;
-      const [pengajuan] = await pool.query('SELECT * FROM pengajuan_judul WHERE mahasiswa_id = ? ORDER BY created_at DESC LIMIT 2', [mhsId]);
+      const [pengajuan] = await pool.query(
+        `SELECT * FROM pengajuan_judul
+         WHERE mahasiswa_id = ?
+         ORDER BY (status = 'acc') DESC, created_at DESC
+         LIMIT 1`,
+        [mhsId]
+      );
       const [bimbingan] = await pool.query(`
         SELECT b.*, d1.name as dosen1_nama, d1.nip as dosen1_nip, d2.name as dosen2_nama, d2.nip as dosen2_nip, p.judul
         FROM bimbingan b
@@ -149,6 +156,8 @@ const getDashboardStats = async (req, res, next) => {
         LEFT JOIN users d2 ON b.dosen_pembimbing2_id = d2.id
         LEFT JOIN pengajuan_judul p ON b.pengajuan_id = p.id
         WHERE b.mahasiswa_id = ?
+        ORDER BY b.updated_at DESC
+        LIMIT 1
       `, [mhsId]);
 
       const [logbookCounts] = await pool.query(`
@@ -162,11 +171,40 @@ const getDashboardStats = async (req, res, next) => {
       const [recentSesi] = await pool.query(`
         SELECT l.*, u.name as dosen_nama
         FROM logbook_sesi l
-        LEFT JOIN bimbingan b ON l.mahasiswa_id = b.mahasiswa_id
-        LEFT JOIN users u ON b.dosen_pembimbing1_id = u.id
+        JOIN users u ON l.dosen_id = u.id
         WHERE l.mahasiswa_id = ?
-        ORDER BY l.tanggal DESC, l.pertemuan_ke DESC LIMIT 1
+        ORDER BY l.pertemuan DESC, l.created_at DESC LIMIT 1
       `, [mhsId]);
+
+      const [minimumRows] = await pool.query(
+        `SELECT key_value FROM konfigurasi_sistem WHERE key_name = 'minSesiSidang' LIMIT 1`
+      );
+      const minimumSesi = Number(minimumRows[0]?.key_value) || 8;
+
+      const [documentRows] = await pool.query(`
+        SELECT title, file_url, document_date FROM (
+          SELECT 'Proposal Pengajuan Judul' AS title, dokumen AS file_url, created_at AS document_date
+          FROM pengajuan_judul
+          WHERE mahasiswa_id = ? AND dokumen IS NOT NULL
+          UNION ALL
+          SELECT CONCAT('Logbook Pertemuan #', pertemuan), dokumen, created_at
+          FROM logbook_sesi
+          WHERE mahasiswa_id = ? AND dokumen IS NOT NULL
+          UNION ALL
+          SELECT perihal, file_url, created_at
+          FROM manajemen_surat
+          WHERE mahasiswa_id = ? AND file_url IS NOT NULL
+        ) AS real_documents
+        ORDER BY document_date DESC
+        LIMIT 5
+      `, [mhsId, mhsId, mhsId]);
+
+      const [documentCountRows] = await pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM pengajuan_judul WHERE mahasiswa_id = ? AND dokumen IS NOT NULL) +
+          (SELECT COUNT(*) FROM logbook_sesi WHERE mahasiswa_id = ? AND dokumen IS NOT NULL) +
+          (SELECT COUNT(*) FROM manajemen_surat WHERE mahasiswa_id = ? AND file_url IS NOT NULL) AS total
+      `, [mhsId, mhsId, mhsId]);
 
       stats = {
         statusPengajuan: pengajuan.length > 0 ? pengajuan[0].status : 'belum_mengajukan',
@@ -175,12 +213,14 @@ const getDashboardStats = async (req, res, next) => {
         sesiDisetujui: logbookMap.disetujui || 0,
         sesiMenunggu: logbookMap.menunggu_review || 0,
         sesiRevisi: logbookMap.revisi || 0,
-        targetMinimalSesi: 8
+        targetMinimalSesi: minimumSesi,
+        totalDokumen: Number(documentCountRows[0]?.total || 0)
       };
       extraData = {
         pengajuanTerakhir: pengajuan[0] || null,
         bimbinganAktif: bimbingan[0] || null,
-        sesiTerakhir: recentSesi[0] || null
+        sesiTerakhir: recentSesi[0] || null,
+        dokumenTerkini: documentRows
       };
     }
 

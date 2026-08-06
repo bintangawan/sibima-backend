@@ -2,7 +2,7 @@
 -- SIBIMA — Sistem Informasi Bimbingan Tugas Akhir
 -- MySQL Database Schema & Seeding
 -- Created: 2026-07-07
--- Description: Complete relational database schema for SIBIMA with 10 tables,
+-- Description: Complete relational database schema for SIBIMA with 12 tables,
 --              foreign key constraints, performance indexes, and initial seed data.
 -- ============================================================================
 
@@ -104,7 +104,8 @@ CREATE TABLE pengajuan_judul (
   prodi_id INT UNSIGNED NULL,
   judul TEXT NOT NULL,
   bidang VARCHAR(150) NOT NULL,
-  status ENUM('menunggu', 'acc', 'ditolak') DEFAULT 'menunggu',
+  latar_belakang TEXT NULL,
+  status ENUM('menunggu', 'revisi', 'acc', 'ditolak', 'dibatalkan') DEFAULT 'menunggu',
   tanggal DATE NOT NULL,
   dosen_usulan1_id VARCHAR(50) NULL,
   dosen_usulan2_id VARCHAR(50) NULL,
@@ -165,6 +166,7 @@ CREATE TABLE logbook_sesi (
   dokumen VARCHAR(255) NULL,
   catatan_mahasiswa TEXT NULL,
   catatan_dosen TEXT NULL,
+  checklist_revisi JSON NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_logbook_bimbingan FOREIGN KEY (bimbingan_id) REFERENCES bimbingan(id) ON DELETE CASCADE,
@@ -178,29 +180,82 @@ CREATE TABLE logbook_sesi (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
--- 8. Table: manajemen_surat
+-- 8. Table: pengajuan_persetujuan (Seminar Proposal / Sidang Skripsi)
+-- ----------------------------------------------------------------------------
+DROP TABLE IF EXISTS pengajuan_persetujuan;
+CREATE TABLE pengajuan_persetujuan (
+  id VARCHAR(50) PRIMARY KEY,
+  bimbingan_id VARCHAR(50) NOT NULL,
+  mahasiswa_id VARCHAR(50) NOT NULL,
+  jenis ENUM('seminar_proposal', 'sidang_skripsi') NOT NULL,
+  attempt INT UNSIGNED NOT NULL DEFAULT 1,
+  status ENUM('menunggu', 'disetujui', 'ditolak', 'dibatalkan') DEFAULT 'menunggu',
+  tanggal_pengajuan DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  catatan_mahasiswa TEXT NULL,
+  dokumen VARCHAR(255) NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pengajuan_persetujuan_bimbingan FOREIGN KEY (bimbingan_id) REFERENCES bimbingan(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pengajuan_persetujuan_mhs FOREIGN KEY (mahasiswa_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_pengajuan_persetujuan_attempt (bimbingan_id, jenis, attempt),
+  INDEX idx_pengajuan_persetujuan_mhs (mahasiswa_id),
+  INDEX idx_pengajuan_persetujuan_status (status),
+  INDEX idx_pengajuan_persetujuan_jenis (jenis),
+  INDEX idx_pengajuan_persetujuan_tanggal (tanggal_pengajuan)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 9. Table: persetujuan_dosen (Keputusan per Pembimbing)
+-- ----------------------------------------------------------------------------
+DROP TABLE IF EXISTS persetujuan_dosen;
+CREATE TABLE persetujuan_dosen (
+  id VARCHAR(50) PRIMARY KEY,
+  pengajuan_persetujuan_id VARCHAR(50) NOT NULL,
+  dosen_id VARCHAR(50) NOT NULL,
+  peran ENUM('pembimbing_1', 'pembimbing_2') NOT NULL,
+  status ENUM('menunggu', 'disetujui', 'ditolak') DEFAULT 'menunggu',
+  catatan_dosen TEXT NULL,
+  tanggal_keputusan DATETIME NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_persetujuan_dosen_pengajuan FOREIGN KEY (pengajuan_persetujuan_id) REFERENCES pengajuan_persetujuan(id) ON DELETE CASCADE,
+  CONSTRAINT fk_persetujuan_dosen_user FOREIGN KEY (dosen_id) REFERENCES users(id) ON DELETE RESTRICT,
+  UNIQUE KEY uq_persetujuan_dosen (pengajuan_persetujuan_id, dosen_id),
+  INDEX idx_persetujuan_dosen_user (dosen_id),
+  INDEX idx_persetujuan_dosen_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 10. Table: manajemen_surat
 -- ----------------------------------------------------------------------------
 DROP TABLE IF EXISTS manajemen_surat;
 CREATE TABLE manajemen_surat (
   id VARCHAR(50) PRIMARY KEY,
   no_surat VARCHAR(100) NOT NULL UNIQUE,
   mahasiswa_id VARCHAR(50) NOT NULL,
-  jenis ENUM('sk_pembimbing', 'ijin_riset', 'siap_sidang', 'lainnya') DEFAULT 'sk_pembimbing',
+  pengajuan_id VARCHAR(50) NULL,
+  bimbingan_id VARCHAR(50) NULL,
+  jenis ENUM('nota_tugas', 'sk_pembimbing', 'ijin_riset', 'siap_sidang', 'lainnya') DEFAULT 'nota_tugas',
   perihal VARCHAR(255) NOT NULL,
   tanggal DATE NOT NULL,
   status ENUM('draf', 'menunggu_ttd', 'terbit', 'arsip') DEFAULT 'terbit',
   file_url VARCHAR(255) NULL,
+  template_version VARCHAR(50) NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_surat_mhs FOREIGN KEY (mahasiswa_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_surat_pengajuan FOREIGN KEY (pengajuan_id) REFERENCES pengajuan_judul(id) ON DELETE SET NULL,
+  CONSTRAINT fk_surat_bimbingan FOREIGN KEY (bimbingan_id) REFERENCES bimbingan(id) ON DELETE SET NULL,
   INDEX idx_surat_mhs (mahasiswa_id),
   INDEX idx_surat_jenis (jenis),
   INDEX idx_surat_status (status),
-  INDEX idx_surat_no (no_surat)
+  INDEX idx_surat_no (no_surat),
+  INDEX idx_surat_pengajuan (pengajuan_id),
+  INDEX idx_surat_bimbingan (bimbingan_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
--- 9. Table: konfigurasi_sistem
+-- 11. Table: konfigurasi_sistem
 -- ----------------------------------------------------------------------------
 DROP TABLE IF EXISTS konfigurasi_sistem;
 CREATE TABLE konfigurasi_sistem (
@@ -213,7 +268,7 @@ CREATE TABLE konfigurasi_sistem (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
--- 10. Table: audit_log
+-- 12. Table: audit_log
 -- ----------------------------------------------------------------------------
 DROP TABLE IF EXISTS audit_log;
 CREATE TABLE audit_log (
@@ -284,9 +339,9 @@ INSERT INTO logbook_sesi (id, bimbingan_id, mahasiswa_id, dosen_id, pertemuan, t
 ('sesi-3', 'BIM-001', 'u5', 'u3', 3, '2026-07-03', 'Pembahasan Bab 3: Metodologi Penelitian & Pemodelan Arsitektur AI', 'Bab 3 - Metodologi', 'disetujui', 'Draf_Bab3_v2.pdf', 'Konsultasi mengenai pemodelan arsitektur CNN dan pembagian persentase data latih vs data uji.', 'Arsitektur CNN sudah sesuai. Lanjutkan untuk pengumpulan dataset dan uji coba latih model.');
 
 -- 8. Seed Manajemen Surat
-INSERT INTO manajemen_surat (id, no_surat, mahasiswa_id, jenis, perihal, tanggal, status, file_url) VALUES
-('SK-2026-001', '104/UN.FST/SK-PEMB/2026', 'u5', 'sk_pembimbing', 'SK Penetapan Dosen Pembimbing Skripsi Semester Genap', '2026-07-03', 'terbit', '/storage/surat/SK_Pembimbing_1905101050.pdf'),
-('SK-2026-002', '105/UN.FST/SK-PEMB/2026', 'u7', 'sk_pembimbing', 'SK Penetapan Dosen Pembimbing Skripsi Semester Genap', '2026-07-03', 'terbit', '/storage/surat/SK_Pembimbing_1905101052.pdf');
+INSERT INTO manajemen_surat (id, no_surat, mahasiswa_id, pengajuan_id, bimbingan_id, jenis, perihal, tanggal, status, template_version) VALUES
+('SK-2026-001', '104/UN.FST/SK-PEMB/2026', 'u5', 'PEN-2026-001', 'BIM-001', 'nota_tugas', 'Nota Tugas Pembimbing Skripsi', '2026-07-03', 'terbit', 'nota-tugas-v1'),
+('SK-2026-002', '105/UN.FST/SK-PEMB/2026', 'u7', 'PEN-2026-002', 'BIM-002', 'nota_tugas', 'Nota Tugas Pembimbing Skripsi', '2026-07-03', 'terbit', 'nota-tugas-v1');
 
 -- 9. Seed Konfigurasi Sistem
 INSERT INTO konfigurasi_sistem (key_name, key_value, description) VALUES

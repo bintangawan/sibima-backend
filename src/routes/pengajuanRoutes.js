@@ -9,6 +9,6 @@ router.use(authenticate);
 router.get('/', pengajuanController.getPengajuan);
 router.post('/', upload.single('proposal'), pengajuanController.createPengajuan);
 router.put('/:id/verify', authorize('superadmin', 'admin'), pengajuanController.verifyPengajuan);
-router.delete('/:id', pengajuanController.cancelPengajuan);
+router.delete('/:id', authorize('mahasiswa', 'admin', 'superadmin'), pengajuanController.cancelPengajuan);
 
 module.exports = router;

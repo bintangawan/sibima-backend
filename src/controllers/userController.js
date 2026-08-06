@@ -13,7 +13,9 @@ const getUsers = async (req, res, next) => {
       SELECT u.id, u.name, u.email, u.role, u.status, u.prodi_id, u.nim, u.nip, 
              u.angkatan, u.phone, u.alamat, u.avatar, u.kuota_max, u.keahlian, 
              u.last_login, u.created_at, p.nama as prodi_nama,
-             (SELECT COUNT(*) FROM bimbingan b WHERE b.dosen_pembimbing1_id = u.id OR b.dosen_pembimbing2_id = u.id) as current_bimbingan_count
+             (SELECT COUNT(*) FROM bimbingan b
+              WHERE (b.dosen_pembimbing1_id = u.id OR b.dosen_pembimbing2_id = u.id)
+                AND b.status_bimbingan <> 'selesai') as current_bimbingan_count
       FROM users u 
       LEFT JOIN prodi p ON u.prodi_id = p.id 
       WHERE 1=1

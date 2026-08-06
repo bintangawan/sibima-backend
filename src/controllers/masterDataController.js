@@ -1,6 +1,61 @@
 const pool = require('../config/database');
 
 // ============================================================================
+// MASTER DATA SUMMARY
+// ============================================================================
+const getSummary = async (req, res, next) => {
+  try {
+    const [[userCounts], [prodiCount], [activeSemester]] = await Promise.all([
+      pool.query(`
+        SELECT
+          SUM(role = 'dosen' AND status = 'aktif') AS total_dosen_aktif,
+          SUM(role = 'mahasiswa' AND status = 'aktif') AS total_mahasiswa_aktif
+        FROM users
+      `),
+      pool.query('SELECT COUNT(*) AS total_prodi FROM prodi'),
+      pool.query(`
+        SELECT id, kode, nama, mulai, selesai
+        FROM tahun_ajaran
+        WHERE status = 'aktif'
+        ORDER BY mulai DESC
+        LIMIT 1
+      `)
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total_dosen_aktif: Number(userCounts[0]?.total_dosen_aktif || 0),
+        total_mahasiswa_aktif: Number(userCounts[0]?.total_mahasiswa_aktif || 0),
+        total_prodi: Number(prodiCount[0]?.total_prodi || 0),
+        tahun_ajaran_aktif: activeSemester[0] || null
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getActiveDosen = async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT u.id, u.name, u.nip, u.keahlian, u.kuota_max, u.prodi_id,
+              p.nama AS prodi_nama,
+              (SELECT COUNT(*) FROM bimbingan b
+               WHERE (b.dosen_pembimbing1_id = u.id OR b.dosen_pembimbing2_id = u.id)
+                 AND b.status_bimbingan <> 'selesai') AS current_bimbingan_count
+       FROM users u
+       LEFT JOIN prodi p ON u.prodi_id = p.id
+       WHERE u.role = 'dosen' AND u.status = 'aktif'
+       ORDER BY u.name ASC`
+    );
+    return res.status(200).json({ success: true, count: rows.length, data: rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================================
 // PRODI MANAGEMENT
 // ============================================================================
 const getProdi = async (req, res, next) => {
@@ -106,6 +161,8 @@ const getFakultas = async (req, res, next) => {
 };
 
 module.exports = {
+  getSummary,
+  getActiveDosen,
   getProdi,
   createProdi,
   updateProdi,
