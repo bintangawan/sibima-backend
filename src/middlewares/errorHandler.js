@@ -28,6 +28,20 @@ const errorHandler = (err, req, res, next) => {
     });
   }
 
+  if (err.code === 'ER_DUP_ENTRY') {
+    return res.status(409).json({
+      success: false,
+      message: 'Data dengan nilai unik tersebut sudah terdaftar. Periksa kembali email, NIM, NIP, atau kode yang digunakan.'
+    });
+  }
+
+  if (err.code === 'ER_ROW_IS_REFERENCED_2') {
+    return res.status(409).json({
+      success: false,
+      message: 'Data tidak dapat dihapus karena masih digunakan oleh transaksi lain.'
+    });
+  }
+
   // Handle default 500 server error
   return res.status(500).json({
     success: false,

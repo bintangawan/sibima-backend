@@ -88,6 +88,38 @@ const login = async (req, res, next) => {
   }
 };
 
+/** Record a password-reset request for follow-up by a superadmin. */
+const requestPasswordReset = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: 'Email wajib diisi.' });
+
+    const [rows] = await pool.query('SELECT id, name, role FROM users WHERE email = ? LIMIT 1', [email]);
+    if (rows.length > 0) {
+      const user = rows[0];
+      await pool.query(
+        `INSERT INTO audit_log (id, user_id, user_name, role, action, ip_address, details)
+         VALUES (?, ?, ?, ?, 'PASSWORD_RESET_REQUEST', ?, ?)`,
+        [
+          `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          user.id,
+          user.name,
+          user.role,
+          req.ip || '127.0.0.1',
+          `Permintaan reset password untuk akun ${email}.`
+        ]
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Permintaan reset telah dicatat. Hubungi superadmin untuk memperoleh password baru.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 /**
  * Get currently authenticated user profile
  * GET /api/v1/auth/me
@@ -219,6 +251,7 @@ const updateProfile = async (req, res, next) => {
 
 module.exports = {
   login,
+  requestPasswordReset,
   getMe,
   changePassword,
   updateProfile

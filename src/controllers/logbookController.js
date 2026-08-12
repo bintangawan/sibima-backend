@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const { parseBabNumber, buildBabProgress, getBabProgress } = require('../utils/babProgress');
+const { createNotification } = require('../services/notificationService');
 
 const getMinimumSesi = async () => {
   const [rows] = await pool.query(
@@ -41,6 +42,8 @@ const getDosenBimbingan = async (req, res, next) => {
          pr.nama AS prodi_nama,
          p.judul,
          p.bidang,
+         d1.name AS dosen_pembimbing1_nama,
+         d2.name AS dosen_pembimbing2_nama,
          CASE
            WHEN b.dosen_pembimbing1_id = ? THEN 'pembimbing_1'
            WHEN b.dosen_pembimbing2_id = ? THEN 'pembimbing_2'
@@ -50,6 +53,16 @@ const getDosenBimbingan = async (req, res, next) => {
          (SELECT COUNT(*) FROM logbook_sesi l WHERE l.bimbingan_id = b.id AND l.status = 'disetujui') AS sesi_disetujui,
          (SELECT COUNT(*) FROM logbook_sesi l WHERE l.bimbingan_id = b.id AND l.dosen_id = ? AND l.status = 'menunggu_review') AS menunggu_review,
          (SELECT l.bab FROM logbook_sesi l WHERE l.bimbingan_id = b.id ORDER BY l.tanggal DESC, l.pertemuan DESC LIMIT 1) AS bab_terakhir,
+         (SELECT MAX(l.pertemuan) FROM logbook_sesi l WHERE l.bimbingan_id = b.id) AS pertemuan_terakhir,
+         COALESCE(
+           (SELECT MAX(l.updated_at) FROM logbook_sesi l WHERE l.bimbingan_id = b.id),
+           b.updated_at
+         ) AS aktivitas_terakhir,
+         TIMESTAMPDIFF(
+           DAY,
+           COALESCE((SELECT MAX(l.updated_at) FROM logbook_sesi l WHERE l.bimbingan_id = b.id), b.updated_at),
+           CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')
+         ) AS hari_tanpa_aktivitas,
          (SELECT l.status FROM logbook_sesi l WHERE l.bimbingan_id = b.id AND l.bab LIKE 'Bab 1%' ORDER BY l.pertemuan DESC LIMIT 1) AS bab1_status,
          (SELECT l.status FROM logbook_sesi l WHERE l.bimbingan_id = b.id AND l.bab LIKE 'Bab 2%' ORDER BY l.pertemuan DESC LIMIT 1) AS bab2_status,
          (SELECT l.status FROM logbook_sesi l WHERE l.bimbingan_id = b.id AND l.bab LIKE 'Bab 3%' ORDER BY l.pertemuan DESC LIMIT 1) AS bab3_status,
@@ -62,6 +75,8 @@ const getDosenBimbingan = async (req, res, next) => {
        JOIN users m ON b.mahasiswa_id = m.id
        LEFT JOIN prodi pr ON m.prodi_id = pr.id
        LEFT JOIN pengajuan_judul p ON b.pengajuan_id = p.id
+       LEFT JOIN users d1 ON b.dosen_pembimbing1_id = d1.id
+       LEFT JOIN users d2 ON b.dosen_pembimbing2_id = d2.id
        WHERE 1 = 1 ${roleFilter}
        ORDER BY m.name ASC`,
       [user.id, user.id, user.id, user.id, ...params]
@@ -75,7 +90,12 @@ const getDosenBimbingan = async (req, res, next) => {
       menunggu_review: Number(row.menunggu_review || 0),
       target_sesi: minimumSesi,
       sempro_eligible: [row.bab1_status, row.bab2_status, row.bab3_status].every((status) => status === 'disetujui'),
-      progress: Math.min(100, Math.round((Number(row.sesi_disetujui || 0) / minimumSesi) * 100))
+      progress: Math.min(100, Math.round((Number(row.sesi_disetujui || 0) / minimumSesi) * 100)),
+      monitoring_status: ['sidang', 'selesai'].includes(row.status_bimbingan)
+        ? 'siap_sidang'
+        : Number(row.hari_tanpa_aktivitas || 0) > 14
+          ? 'stagnan'
+          : 'aktif'
     }));
 
     return res.status(200).json({ success: true, count: data.length, data });
@@ -409,6 +429,14 @@ const createLogbook = async (req, res, next) => {
       ]
     );
 
+    await createNotification(pool, {
+      userId: targetDosenId,
+      type: 'info',
+      title: 'Logbook Baru Menunggu Review',
+      message: `${user.name} mengirim logbook Pertemuan #${pertemuan} (${bab}).`,
+      link: `/dosen/review/${user.nim || user.id}`
+    });
+
     return res.status(201).json({
       success: true,
       message: 'Sesi bimbingan berhasil dicatat!',
@@ -472,6 +500,14 @@ const reviewLogbook = async (req, res, next) => {
         `Dosen ${req.user?.name} mereview sesi bimbingan ID ${id} dengan status: ${status.toUpperCase()}.`
       ]
     );
+
+    await createNotification(pool, {
+      userId: sesi.mahasiswa_id,
+      type: status === 'disetujui' ? 'success' : 'warning',
+      title: status === 'disetujui' ? 'Logbook Disetujui' : 'Logbook Perlu Revisi',
+      message: `Pertemuan #${sesi.pertemuan} (${sesi.bab}) telah direview oleh ${req.user?.name || 'dosen'}.`,
+      link: `/mahasiswa/logbook/${sesi.id}`
+    });
 
     return res.status(200).json({
       success: true,

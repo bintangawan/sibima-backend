@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const { createNotaTugasRecord } = require('../services/notaTugasService');
+const { createNotification, notifyAdminsForProdi } = require('../services/notificationService');
 
 /**
  * Get all pengajuan judul with role-based filtering
@@ -194,6 +195,13 @@ const createPengajuan = async (req, res, next) => {
       ]
     );
 
+    await notifyAdminsForProdi(connection, user.prodi_id, {
+      type: 'info',
+      title: 'Pengajuan Judul Baru',
+      message: `${user.name} (${user.nim || '-'}) mengajukan judul baru untuk diverifikasi.`,
+      link: '/admin/verifikasi'
+    });
+
     await connection.commit();
 
     return res.status(201).json({
@@ -362,6 +370,16 @@ const verifyPengajuan = async (req, res, next) => {
         `Memverifikasi pengajuan judul (ID: ${id}) dengan status: ${status.toUpperCase()}.`
       ]
     );
+
+    await createNotification(connection, {
+      userId: pengajuan.mahasiswa_id,
+      type: status === 'acc' ? 'success' : status === 'revisi' ? 'warning' : 'danger',
+      title: status === 'acc' ? 'Judul Skripsi Disetujui' : status === 'revisi' ? 'Judul Perlu Direvisi' : 'Judul Skripsi Ditolak',
+      message: status === 'acc'
+        ? 'Judul Anda telah disetujui dan dosen pembimbing telah ditetapkan.'
+        : catatan?.trim() || `Pengajuan judul Anda berstatus ${status}.`,
+      link: '/mahasiswa/pengajuan'
+    });
 
     await connection.commit();
 

@@ -2,7 +2,7 @@
 -- SIBIMA — Sistem Informasi Bimbingan Tugas Akhir
 -- MySQL Database Schema & Seeding
 -- Created: 2026-07-07
--- Description: Complete relational database schema for SIBIMA with 12 tables,
+-- Description: Complete relational database schema for SIBIMA with 13 tables,
 --              foreign key constraints, performance indexes, and initial seed data.
 -- ============================================================================
 
@@ -285,6 +285,24 @@ CREATE TABLE audit_log (
   INDEX idx_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ----------------------------------------------------------------------------
+-- 13. Table: notifications
+-- ----------------------------------------------------------------------------
+CREATE TABLE notifications (
+  id VARCHAR(50) PRIMARY KEY,
+  user_id VARCHAR(50) NOT NULL,
+  type ENUM('info', 'success', 'warning', 'danger') DEFAULT 'info',
+  title VARCHAR(150) NOT NULL,
+  message TEXT NOT NULL,
+  link VARCHAR(255) NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_notifications_user_created (user_id, created_at),
+  INDEX idx_notifications_user_read (user_id, is_read)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ============================================================================
 -- INITIAL DATA SEEDING
 -- ============================================================================
@@ -319,7 +337,8 @@ INSERT INTO users (id, name, email, password, role, status, prodi_id, nim, nip, 
 ('u4', 'Siti Aminah, S.T., M.T.', 'siti.aminah@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'dosen', 'aktif', 1, NULL, '198203102008012002', NULL, '084444444444', 'Gedung Dosen Lt. 3 No. 305', 'Rekayasa Perangkat Lunak, Cloud Computing', 10),
 ('u5', 'Ahmad Rizki Pratama', 'mahasiswa@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'mahasiswa', 'aktif', 1, '1905101050', NULL, '2022', '081234567890', 'Jl. Perintis Kemerdekaan Km. 10, Tamalanrea, Makassar', NULL, 10),
 ('u6', 'Dewi Lestari', 'dewi.lestari@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'mahasiswa', 'aktif', 1, '1905101055', NULL, '2022', '085555555555', 'Jl. Sahabat No. 12, Makassar', NULL, 10),
-('u7', 'Bambang Pamungkas', 'bambang@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'mahasiswa', 'aktif', 1, '1905101052', NULL, '2022', '086666666666', 'Jl. Tamalanrea Raya No. 45, Makassar', NULL, 10);
+('u7', 'Bambang Pamungkas', 'bambang@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'mahasiswa', 'aktif', 1, '1905101052', NULL, '2022', '086666666666', 'Jl. Tamalanrea Raya No. 45, Makassar', NULL, 10),
+('admin-prodi-2', 'Admin Prodi Sistem Informasi', 'admin.si@sibima.com', '$2a$10$WRHL4IIrcLPwJ6MRH5IYG.LMZ4ygR1hpmz1ir6gn8rZ8cusNO9Nci', 'admin', 'aktif', 2, NULL, NULL, NULL, NULL, 'Fakultas Sains dan Teknologi - Program Studi Sistem Informasi', NULL, 10);
 
 -- 5. Seed Pengajuan Judul
 INSERT INTO pengajuan_judul (id, mahasiswa_id, prodi_id, judul, bidang, status, tanggal, dosen_usulan1_id, dosen_usulan2_id, catatan, dokumen) VALUES

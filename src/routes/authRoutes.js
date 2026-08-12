@@ -6,6 +6,7 @@ const upload = require('../middlewares/upload');
 
 // Public endpoints
 router.post('/login', authController.login);
+router.post('/forgot-password', authController.requestPasswordReset);
 
 // Protected endpoints (require JWT Bearer token)
 router.get('/me', authenticate, authController.getMe);

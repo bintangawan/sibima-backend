@@ -178,37 +178,24 @@ const updateUser = async (req, res, next) => {
       });
     }
 
-    await pool.query(
-      `UPDATE users 
-       SET name = COALESCE(?, name),
-           email = COALESCE(?, email),
-           role = COALESCE(?, role),
-           status = COALESCE(?, status),
-           prodi_id = ?,
-           nim = ?,
-           nip = ?,
-           angkatan = COALESCE(?, angkatan),
-           phone = COALESCE(?, phone),
-           alamat = COALESCE(?, alamat),
-           kuota_max = COALESCE(?, kuota_max),
-           keahlian = COALESCE(?, keahlian)
-       WHERE id = ?`,
-      [
-        name,
-        email,
-        role,
-        status,
-        prodi_id || null,
-        nim || null,
-        nip || null,
-        angkatan,
-        phone,
-        alamat,
-        kuota_max,
-        keahlian,
-        id
-      ]
-    );
+    const allowedFields = ['name', 'email', 'role', 'status', 'prodi_id', 'nim', 'nip', 'angkatan', 'phone', 'alamat', 'kuota_max', 'keahlian'];
+    const nullableFields = new Set(['prodi_id', 'nim', 'nip', 'angkatan', 'phone', 'alamat', 'keahlian']);
+    const assignments = [];
+    const values = [];
+
+    for (const field of allowedFields) {
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+      assignments.push(`${field} = ?`);
+      const value = req.body[field];
+      values.push(nullableFields.has(field) && value === '' ? null : value);
+    }
+
+    if (assignments.length === 0) {
+      return res.status(400).json({ success: false, message: 'Tidak ada data pengguna yang diperbarui.' });
+    }
+
+    values.push(id);
+    await pool.query(`UPDATE users SET ${assignments.join(', ')} WHERE id = ?`, values);
 
     // Record audit log
     await pool.query(

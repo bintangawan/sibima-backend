@@ -12,6 +12,13 @@ const getDashboardStats = async (req, res, next) => {
     let recentActivities = [];
     let extraData = {};
 
+    const [[activeSemesterRows], [maintenanceRows], [minimumSesiRows]] = await Promise.all([
+      pool.query(`SELECT id, kode, nama, mulai, selesai FROM tahun_ajaran WHERE status = 'aktif' ORDER BY mulai DESC LIMIT 1`),
+      pool.query(`SELECT key_value FROM konfigurasi_sistem WHERE key_name = 'maintenanceMode' LIMIT 1`),
+      pool.query(`SELECT key_value FROM konfigurasi_sistem WHERE key_name = 'minSesiSidang' LIMIT 1`)
+    ]);
+    const minimumSesi = Number(minimumSesiRows[0]?.key_value) || 8;
+
     if (role === 'superadmin') {
       // 1. Superadmin stats: total users across roles, total prodi, total bimbingan, total pengajuan
       const [userCounts] = await pool.query(`
@@ -33,6 +40,8 @@ const getDashboardStats = async (req, res, next) => {
       const [logs] = await pool.query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 5');
 
       stats = {
+        totalUsers: Object.values(userMap).reduce((total, count) => total + Number(count || 0), 0),
+        totalSuperadmin: userMap.superadmin || 0,
         totalMahasiswa: userMap.mahasiswa || 0,
         totalDosen: userMap.dosen || 0,
         totalAdmin: userMap.admin || 0,
@@ -47,12 +56,19 @@ const getDashboardStats = async (req, res, next) => {
 
     } else if (role === 'admin') {
       // 2. Admin Prodi stats: filtered by prodi_id
-      const prodiId = user.prodi_id || 1;
+      const prodiId = user.prodi_id;
       const [mahasiswaCount] = await pool.query('SELECT COUNT(*) as count FROM users WHERE role = "mahasiswa" AND prodi_id = ?', [prodiId]);
       const [dosenCount] = await pool.query('SELECT COUNT(*) as count FROM users WHERE role = "dosen"');
       const [pengajuanCount] = await pool.query('SELECT status, COUNT(*) as count FROM pengajuan_judul WHERE prodi_id = ? GROUP BY status', [prodiId]);
       const pengajuanMap = { menunggu: 0, acc: 0, ditolak: 0 };
       pengajuanCount.forEach(r => { pengajuanMap[r.status] = r.count; });
+      const [waitingPlottingRows] = await pool.query(
+        `SELECT COUNT(*) AS count
+         FROM pengajuan_judul p
+         LEFT JOIN bimbingan b ON b.pengajuan_id = p.id
+         WHERE p.prodi_id = ? AND p.status = 'acc' AND b.id IS NULL`,
+        [prodiId]
+      );
 
       const [bimbinganCount] = await pool.query(`
         SELECT COUNT(*) as count FROM bimbingan b 
@@ -63,7 +79,9 @@ const getDashboardStats = async (req, res, next) => {
       // Dosen Quota summary
       const [dosenList] = await pool.query(`
         SELECT u.id, u.name, u.nip, u.kuota_max,
-               (SELECT COUNT(*) FROM bimbingan b WHERE b.dosen_pembimbing1_id = u.id OR b.dosen_pembimbing2_id = u.id) as bimbingan_aktif
+               (SELECT COUNT(*) FROM bimbingan b
+                WHERE (b.dosen_pembimbing1_id = u.id OR b.dosen_pembimbing2_id = u.id)
+                  AND b.status_bimbingan <> 'selesai') as bimbingan_aktif
         FROM users u 
         WHERE u.role = "dosen" AND u.status = "aktif"
         ORDER BY bimbingan_aktif DESC LIMIT 5
@@ -83,6 +101,7 @@ const getDashboardStats = async (req, res, next) => {
         totalDosen: dosenCount[0].count || 0,
         pengajuanMenunggu: pengajuanMap.menunggu || 0,
         pengajuanDisetujui: pengajuanMap.acc || 0,
+        menungguPlotting: waitingPlottingRows[0].count || 0,
         bimbinganAktif: bimbinganCount[0].count || 0
       };
       extraData = {
@@ -132,7 +151,8 @@ const getDashboardStats = async (req, res, next) => {
         logbookMenungguReview: logbookMenunggu[0].count || 0,
         siapSidang: bimbinganMap.sidang || 0,
         selesaiBimbingan: bimbinganMap.selesai || 0,
-        kuotaMax: user.kuota_max || 10
+        kuotaMax: user.kuota_max || 10,
+        targetMinimalSesi: minimumSesi
       };
       extraData = {
         pendingReviews,
@@ -176,11 +196,6 @@ const getDashboardStats = async (req, res, next) => {
         ORDER BY l.pertemuan DESC, l.created_at DESC LIMIT 1
       `, [mhsId]);
 
-      const [minimumRows] = await pool.query(
-        `SELECT key_value FROM konfigurasi_sistem WHERE key_name = 'minSesiSidang' LIMIT 1`
-      );
-      const minimumSesi = Number(minimumRows[0]?.key_value) || 8;
-
       const [documentRows] = await pool.query(`
         SELECT title, file_url, document_date FROM (
           SELECT 'Proposal Pengajuan Judul' AS title, dokumen AS file_url, created_at AS document_date
@@ -223,6 +238,11 @@ const getDashboardStats = async (req, res, next) => {
         dokumenTerkini: documentRows
       };
     }
+
+    extraData.system = {
+      activeSemester: activeSemesterRows[0] || null,
+      maintenanceMode: maintenanceRows[0]?.key_value === 'true'
+    };
 
     return res.status(200).json({
       success: true,

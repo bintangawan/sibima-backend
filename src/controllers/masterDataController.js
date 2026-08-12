@@ -116,35 +116,67 @@ const getTahunAjaran = async (req, res, next) => {
 };
 
 const createTahunAjaran = async (req, res, next) => {
+  let connection;
   try {
     const { kode, nama, mulai, selesai, status } = req.body;
     if (!kode || !nama || !mulai || !selesai) {
       return res.status(400).json({ success: false, message: 'Semua kolom tahun ajaran wajib diisi!' });
     }
-    const [result] = await pool.query(
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    if (status === 'aktif') {
+      await connection.query("UPDATE tahun_ajaran SET status = 'arsip' WHERE status = 'aktif'");
+    }
+    const [result] = await connection.query(
       'INSERT INTO tahun_ajaran (kode, nama, mulai, selesai, status) VALUES (?, ?, ?, ?, ?)',
       [kode, nama, mulai, selesai, status || 'draf']
     );
+    await connection.commit();
     return res.status(201).json({ success: true, message: 'Tahun ajaran berhasil ditambahkan!', data: { id: result.insertId, kode, nama } });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (connection) await connection.rollback();
+    next(error);
+  } finally {
+    connection?.release();
+  }
 };
 
 const updateTahunAjaran = async (req, res, next) => {
+  let connection;
   try {
     const { id } = req.params;
     const { kode, nama, mulai, selesai, status } = req.body;
-    await pool.query(
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [existing] = await connection.query('SELECT id FROM tahun_ajaran WHERE id = ? FOR UPDATE', [id]);
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'Tahun ajaran tidak ditemukan.' });
+    }
+    if (status === 'aktif') {
+      await connection.query("UPDATE tahun_ajaran SET status = 'arsip' WHERE status = 'aktif' AND id <> ?", [id]);
+    }
+    await connection.query(
       `UPDATE tahun_ajaran SET kode = COALESCE(?, kode), nama = COALESCE(?, nama), 
        mulai = COALESCE(?, mulai), selesai = COALESCE(?, selesai), status = COALESCE(?, status) WHERE id = ?`,
       [kode, nama, mulai, selesai, status, id]
     );
+    await connection.commit();
     return res.status(200).json({ success: true, message: 'Tahun ajaran berhasil diperbarui!' });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (connection) await connection.rollback();
+    next(error);
+  } finally {
+    connection?.release();
+  }
 };
 
 const deleteTahunAjaran = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const [rows] = await pool.query('SELECT status FROM tahun_ajaran WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ success: false, message: 'Tahun ajaran tidak ditemukan.' });
+    if (rows[0].status === 'aktif') return res.status(409).json({ success: false, message: 'Tahun ajaran yang sedang aktif tidak dapat dihapus.' });
     await pool.query('DELETE FROM tahun_ajaran WHERE id = ?', [id]);
     return res.status(200).json({ success: true, message: 'Tahun ajaran berhasil dihapus!' });
   } catch (error) { next(error); }
